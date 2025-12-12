@@ -1,13 +1,36 @@
 #include "select.h"
 #ifdef MAIN
 #include <Arduino.h>
+#include <secrets.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
 
 // Enable/disable sensors here
 // #define ENABLE_BME280      // BME280 temperature, pressure, humidity, altitude
 #define ENABLE_DHT11       // DHT11 temperature, humidity, heat index
 #define ENABLE_SOIL_MOISTURE  // Soil moisture sensor
 #define ENABLE_SOIL_TEMP      // DS18B20 soil temperature sensor
+
+// RTDB creds
+#define FARM_OWNER "Niranj"        // Farm owner name
+#define NODE_NAME "/Node1"          // Node name
+#define FARM_SIZE 12
+void connectToWiFi();
+void initializeFirebase();
+void uploadSensorData(JsonDocument&);
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+#define UPLOAD_INTERVAL 2000
+
+// Variables
+unsigned long lastUploadTime = 0;
+bool firebaseReady = false;
+bool signupOK = false;
+
 
 // Sensor-specific includes
 #ifdef ENABLE_BME280
@@ -75,7 +98,12 @@ void setup() {
   Serial.println(F("========================"));
   
   initializeSensors();
+
+  connectToWiFi();
   
+  // Initialize Firebase
+  initializeFirebase();
+
   Serial.println();
   delay(2000);
 }
@@ -91,8 +119,100 @@ void loop() {
   
   serializeJson(doc, Serial);
   Serial.println();
+  if (millis() - lastUploadTime > UPLOAD_INTERVAL || lastUploadTime == 0) {
+    if (firebaseReady) {
+      uploadSensorData(doc);
+      lastUploadTime = millis();
+    } else {
+      Serial.println("Firebase not ready. Retrying...");
+      initializeFirebase();
+    }
+  }
   
   delay(2000);
+}
+
+
+// Connect to WiFi
+void connectToWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi Connection Failed!");
+    Serial.println("Please check your credentials and restart.");
+  }
+}
+
+// Initialize Firebase
+void initializeFirebase() {
+  Serial.println("\nInitializing Firebase...");
+  
+  // Configure Firebase
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  
+  // Enable anonymous authentication
+  auth.user.email = "";
+  auth.user.password = "";
+
+  // Signup anonymously in firebase before trying to upload or read data.
+  //Can sign up anonymously a lot of times...
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("Firebase signup successful");
+    signupOK = true;
+  } else {
+    Serial.printf("Firebase signup failed: %s\n", config.signer.signupError.message.c_str());
+  }
+
+  // Assign the callback function for token generation
+  config.token_status_callback = tokenStatusCallback;
+  
+  // Initialize Firebase
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+  
+  // Set the size of HTTP response buffer
+  fbdo.setBSSLBufferSize(1024, 1024);
+  
+  // Set timeout
+  fbdo.setResponseSize(1024);
+  
+  Serial.println("Firebase initialized!");
+  
+  // Wait for Firebase to be ready
+  int attempts = 0;
+  while (!Firebase.ready() && attempts < 30) {
+    Serial.print(".");
+    delay(500);
+    attempts++;
+  }
+  
+  Serial.println();
+  
+  if (Firebase.ready()) {
+    firebaseReady = true;
+    Serial.println("Firebase is ready!");
+  } else {
+    firebaseReady = false;
+    Serial.println("Firebase connection failed!");
+    Serial.println("Please check your API_KEY and DATABASE_URL");
+  }
 }
 
 // Initialize all enabled sensors
@@ -141,6 +261,155 @@ void readSensorData(JsonDocument& doc) {
   readSoilMoisture(doc);
   #endif
 }
+
+// Call: uploadSensorData(doc);
+// Requires: fbdo (FirebaseData), Firebase initialized and firebaseReady true, ArduinoJson included
+
+void uploadSensorData(JsonDocument& doc) {
+  Serial.println("\n==========================================");
+  Serial.println("Uploading sensor JSON to Firebase RTDB...");
+
+  // Make sure Firebase is initialized on your side before calling this.
+  // Build base path: <FARM_OWNER>/FarmData<NODE_NAME>
+  String basePath = String(FARM_OWNER);
+  basePath.concat(String("/FarmData"));
+  basePath.concat(String(NODE_NAME)); // NODE_NAME may contain leading slash in your project
+
+  // Create a timestamp key (unique). Replace with epoch if you have NTP/time available.
+  unsigned long ts = millis();
+  doc["uploaded_at_ms"] = ts;
+
+  // Serialize the incoming JSON document
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  // Target path for the full JSON (under lastReadings/<ts>)
+  String targetPath = basePath;
+  targetPath.concat(String("/lastReadings/"));
+  targetPath.concat(String(ts));
+
+  bool overallSuccess = true;
+
+  // Create FirebaseJson object from serialized string
+  FirebaseJson fbJson;
+  fbJson.setJsonData(jsonString.c_str());
+
+  // Upload full JSON at timestamped node
+  if (Firebase.RTDB.setJSON(&fbdo, targetPath.c_str(), &fbJson)) {
+    Serial.print("✓ JSON uploaded to: ");
+    Serial.println(targetPath);
+  } else {
+    Serial.print("✗ JSON upload failed: ");
+    Serial.println(fbdo.errorReason());
+    overallSuccess = false;
+  }
+
+  // Also update 'latest' pointer with same JSON (so easy reads)
+  String latestPath = basePath;
+  latestPath.concat(String("/lastReadings/latest"));
+  if (Firebase.RTDB.setJSON(&fbdo, latestPath.c_str(), &fbJson)) {
+    Serial.println("✓ 'latest' updated");
+  } else {
+    Serial.print("⚠ failed to update 'latest' pointer: ");
+    Serial.println(fbdo.errorReason());
+    overallSuccess = false;
+  }
+
+  // ---- Upload individual scalar fields (if present in JSON) ----
+  // dht11: temperature, humidity, heatIndex
+  if (doc.containsKey("dht11")) {
+    JsonObject dht = doc["dht11"];
+    if (dht.containsKey("temperature")) {
+      float temperature = dht["temperature"].as<float>();
+      String path = basePath; path.concat(String("/Temperature"));
+      if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), temperature)) {
+        Serial.println("✓ Temperature uploaded");
+      } else {
+        Serial.print("✗ Temperature upload failed: ");
+        Serial.println(fbdo.errorReason());
+        overallSuccess = false;
+      }
+    }
+
+    if (dht.containsKey("humidity")) {
+      float humidity = dht["humidity"].as<float>();
+      String path = basePath; path.concat(String("/Humidity"));
+      if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), humidity)) {
+        Serial.println("✓ Humidity uploaded");
+      } else {
+        Serial.print("✗ Humidity upload failed: ");
+        Serial.println(fbdo.errorReason());
+        overallSuccess = false;
+      }
+    }
+
+    if (dht.containsKey("heatIndex")) {
+      float hi = dht["heatIndex"].as<float>();
+      String path = basePath; path.concat(String("/HeatIndex"));
+      if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), hi)) {
+        Serial.println("✓ HeatIndex uploaded");
+      } else {
+        Serial.print("✗ HeatIndex upload failed: ");
+        Serial.println(fbdo.errorReason());
+        overallSuccess = false;
+      }
+    }
+  }
+
+  // soilTemperature: celsius, fahrenheit
+  if (doc.containsKey("soilTemperature")) {
+    JsonObject st = doc["soilTemperature"];
+    if (st.containsKey("celsius")) {
+      float sc = st["celsius"].as<float>();
+      String path = basePath; path.concat(String("/SoilTemperature"));
+      if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), sc)) {
+        Serial.println("✓ Soil Temperature uploaded");
+      } else {
+        Serial.print("✗ Soil Temperature upload failed: ");
+        Serial.println(fbdo.errorReason());
+        overallSuccess = false;
+      }
+    }
+    // }
+    // if (st.containsKey("fahrenheit")) {
+    //   float sf = st["fahrenheit"].as<float>();
+    //   String path = basePath; path.concat(String("/SoilTemperatureF"));
+    //   if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), sf)) {
+    //     Serial.println("✓ Soil Temperature (F) uploaded");
+    //   } else {
+    //     Serial.print("✗ Soil Temperature (F) upload failed: ");
+    //     Serial.println(fbdo.errorReason());
+    //     overallSuccess = false;
+    //   }
+    // }
+  }
+
+  // soilMoisture: raw, percentage
+  if (doc.containsKey("soilMoisture")) {
+    JsonObject sm = doc["soilMoisture"];
+    if (sm.containsKey("percentage")) {
+      float pct = sm["percentage"].as<float>();
+      String path = basePath; path.concat(String("/SoilMoisture"));
+      if (Firebase.RTDB.setFloat(&fbdo, path.c_str(), pct)) {
+        Serial.println("✓ Soil Moisture (percentage) uploaded");
+      } else {
+        Serial.print("✗ Soil Moisture (percentage) upload failed: ");
+        Serial.println(fbdo.errorReason());
+        overallSuccess = false;
+      }
+    }
+  }
+
+  // Summary
+  if (overallSuccess) {
+    Serial.println("\n✓ All data uploaded successfully!");
+  } else {
+    Serial.println("\n⚠ Some data failed to upload (see lines above)");
+  }
+
+  Serial.println("==========================================");
+}
+
 
 #ifdef ENABLE_BME280
 // Read BME280 sensor (temperature, pressure, humidity, altitude)

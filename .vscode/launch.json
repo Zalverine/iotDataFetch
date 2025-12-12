@@ -15,6 +15,9 @@
             "executable": "C:/Users/Ayush/VS_code_projects/check/iotDataFetch/.pio/build/esp32/firmware.elf",
             "projectEnvName": "esp32",
             "toolchainBinDir": "C:/Users/Ayush/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "E:/SIH Jaipur/Software Part/iotDataFetch/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "C:/Users/AMOGH/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
@@ -28,6 +31,9 @@
             "executable": "C:/Users/Ayush/VS_code_projects/check/iotDataFetch/.pio/build/esp32/firmware.elf",
             "projectEnvName": "esp32",
             "toolchainBinDir": "C:/Users/Ayush/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "E:/SIH Jaipur/Software Part/iotDataFetch/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "C:/Users/AMOGH/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
@@ -37,6 +43,9 @@
             "executable": "C:/Users/Ayush/VS_code_projects/check/iotDataFetch/.pio/build/esp32/firmware.elf",
             "projectEnvName": "esp32",
             "toolchainBinDir": "C:/Users/Ayush/.platformio/packages/toolchain-xtensa-esp32/bin",
+            "executable": "E:/SIH Jaipur/Software Part/iotDataFetch/.pio/build/esp32/firmware.elf",
+            "projectEnvName": "esp32",
+            "toolchainBinDir": "C:/Users/AMOGH/.platformio/packages/toolchain-xtensa-esp32/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }
